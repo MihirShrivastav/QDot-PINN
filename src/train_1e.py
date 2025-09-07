@@ -184,7 +184,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--hbar-omega-x", type=float, default=3.0, help="meV; used if c4 not provided")
     ap.add_argument("--hbar-omega-y", type=float, default=5.0, help="meV; used if c2y not provided")
     # Training hyperparameters
-    ap.add_argument("--epochs", type=int, default=3000)
+    ap.add_argument("--epochs", type=int, default=1000)
     ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--layers", type=int, default=6)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -203,6 +203,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--outdir", type=str, default="data/run_1e")
     ap.add_argument("--grid-save", type=int, default=200, help="save psi on an N x N grid for plots")
     ap.add_argument("--no-plots", action="store_true", help="do not save plots")
+    # Viz-only mode
+    ap.add_argument("--viz-only", action="store_true", help="Only generate visualizations/metrics from a saved model; no training")
+    ap.add_argument("--model", type=str, default=None, help="Path to model weights (.pt) to load in viz-only mode; default: <outdir>/model_best.pt")
+
     return ap.parse_args()
 
 
@@ -254,9 +258,9 @@ def compute_density_features(xs_t: torch.Tensor, ys_t: torch.Tensor, psi_grid_t:
     if a_param is not None:
         minima = [{"x": -float(a_param), "y": 0.0}, {"x": float(a_param), "y": 0.0}]
         # nearest grid indices to (-a,0) and (+a,0)
-        ixL = int(torch.argmin(torch.abs(xs_t - (-float(a_param))))).item()
-        ixR = int(torch.argmin(torch.abs(xs_t - (float(a_param))))).item()
-        iy0 = int(torch.argmin(torch.abs(ys_t - 0.0))).item()
+        ixL = int(torch.argmin(torch.abs(xs_t - (-float(a_param)))).item())
+        ixR = int(torch.argmin(torch.abs(xs_t - float(a_param))).item())
+        iy0 = int(torch.argmin(torch.abs(ys_t - 0.0)).item())
         pL = float(P[iy0, ixL].item())
         pR = float(P[iy0, ixR].item())
         minima_density = [
@@ -287,6 +291,114 @@ def main():
         p = BiquadraticParams(a=args.a, c4=float(args.c4), c2y=float(args.c2y), delta=args.delta)
 
     print(f"Using biquadratic params: a={p.a:.3f}, c4={p.c4:.3f}, c2y={p.c2y:.3f}, delta={p.delta:.3f}")
+    # Viz-only path: load model and regenerate outputs, no training
+    outdir = Path(args.outdir)
+    if args.viz_only:
+        cfg = None
+        cfg_path = outdir / "config.json"
+        hidden = args.hidden
+        layers = args.layers
+        nq_eval = args.nq
+        # Default box based on current p
+        X_box = 3.0 * max(1.2, p.a) + 1.0
+        Y_box = X_box
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                params = cfg.get("params", {})
+                if all(k in params for k in ("a", "c4", "c2y", "delta")):
+                    p = BiquadraticParams(a=float(params["a"]), c4=float(params["c4"]), c2y=float(params["c2y"]), delta=float(params["delta"]))
+                    # recompute potential with possibly updated params
+                    vfun = v_biq_factory(p)
+                box = cfg.get("box", {})
+                X_box = float(box.get("X", X_box))
+                Y_box = float(box.get("Y", Y_box))
+                nq_eval = int(box.get("nq", args.nq))
+                aargs = cfg.get("args", {})
+                hidden = int(aargs.get("hidden", hidden))
+                layers = int(aargs.get("layers", layers))
+            except Exception:
+                pass
+        device = torch.device(args.device)
+        # Build model architecture (try to match training config)
+        model = SIREN(in_features=2, hidden_features=hidden, hidden_layers=layers, out_features=1).to(device)
+        weights_path = Path(args.model) if args.model else (outdir / "model_best.pt")
+        sd = torch.load(weights_path, map_location=device)
+        model.load_state_dict(sd)
+        model.eval()
+
+        # Quadrature grid for evaluation
+        xy_q, w_q = make_quadrature_box(X_box, Y_box, n=nq_eval)
+        xy_q = xy_q.to(device)
+        w_q = w_q.to(device)
+
+        vfun_batch = lambda xy: vectorized_biq_v(p, xy)
+        E_fin = rayleigh_ritz_energy(model, vfun_batch, xy_q, w_q)
+        Lres_fin = pde_residual_loss(model, vfun_batch, xy_q[:: max(1, (nq_eval*nq_eval)//2000) ])
+        Lnorm_fin = normalization_penalty(model, xy_q, w_q)
+        norm_val_fin = compute_norm_value(model, xy_q, w_q)
+
+        outdir.mkdir(parents=True, exist_ok=True)
+        # Do not overwrite original energies.txt; write a separate evaluation file
+        (outdir / "energies_eval.txt").write_text(
+            f"E_eval={E_fin.item():.8f}\n"
+            f"residual_eval={Lres_fin.item():.8e}\n"
+            f"norm_value_eval={norm_val_fin.item():.8f}\n"
+            f"norm_penalty_eval={Lnorm_fin.item():.8e}\n",
+            encoding="utf-8",
+        )
+
+        # Save psi on a grid for plotting and analysis (normalized on the grid)
+        N = int(args.grid_save)
+        xs = torch.linspace(-X_box, X_box, N, device=device)
+        ys = torch.linspace(-Y_box, Y_box, N, device=device)
+        Xg, Yg = torch.meshgrid(xs, ys, indexing="xy")
+        xy_eval = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=-1)
+        with torch.no_grad():
+            psi_grid = model(xy_eval).reshape(N, N).cpu()
+        dx = (2 * X_box) / (N - 1)
+        dy = (2 * Y_box) / (N - 1)
+        total_prob_grid = float((psi_grid.pow(2).sum().item()) * dx * dy)
+        if total_prob_grid > 0.0:
+            psi_grid = psi_grid / (total_prob_grid ** 0.5)
+
+        # Density diagnostics
+        feats = compute_density_features(xs.cpu(), ys.cpu(), psi_grid, a_param=p.a)
+        (outdir / "density_features.json").write_text(json.dumps(feats, indent=2), encoding="utf-8")
+        with open(outdir / "density_features.csv", "w", encoding="utf-8") as fdf:
+            fdf.write("total_prob,com_x,com_y,left_mass,right_mass,peak1_x,peak1_y,peak1_p,peak2_x,peak2_y,peak2_p\n")
+            pk1 = feats["peaks"][0] if len(feats.get("peaks", []))>0 else {"x":"","y":"","p":""}
+            pk2 = feats["peaks"][1] if len(feats.get("peaks", []))>1 else {"x":"","y":"","p":""}
+            fdf.write(
+                f"{feats['total_prob']},{feats['com']['x']},{feats['com']['y']},{feats['side_mass']['left']},{feats['side_mass']['right']},"
+                f"{pk1.get('x','')},{pk1.get('y','')},{pk1.get('p','')},{pk2.get('x','')},{pk2.get('y','')},{pk2.get('p','')}\n"
+            )
+
+        # Plots
+        if not args.no_plots:
+            figV = plot_potential(lambda x, y: vfun(float(x), float(y)), X_box, Y_box, nx=200, ny=200, title="Potential v(x,y)")
+            figV.savefig(outdir / "potential.png", dpi=150)
+            xs_np = xs.cpu().numpy(); ys_np = ys.cpu().numpy(); psi_np = psi_grid.numpy()
+            figP = plot_wavefunction_density(
+                xs_np,
+                ys_np,
+                psi_np.reshape(-1),
+                N,
+                N,
+                title=r"$|\psi|^2$",
+                cmap="inferno",
+                gamma=0.6,
+                overlay_contours=True,
+                contour_levels=12,
+                overlay_points=[(-p.a, 0.0), (p.a, 0.0)],
+                aspect="equal",
+            )
+            figP.savefig(outdir / "psi_density.png", dpi=150)
+
+        torch.save({"x": xs.cpu(), "y": ys.cpu(), "psi": psi_grid}, outdir / "psi_grid.pt")
+        print(f"Viz-only complete. Outputs written in {outdir}")
+        return
+
 
     X = Y = 3.0 * max(1.2, p.a) + 1.0
     vfun = v_biq_factory(p)
@@ -388,6 +500,12 @@ def main():
     xy_eval = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=-1)
     with torch.no_grad():
         psi_grid = model(xy_eval).reshape(N, N).cpu()
+    # Normalize psi on the plotting grid so that ∫|psi|^2 dΩ ≈ 1 for visualization/metrics
+    dx = (2 * X) / (N - 1)
+    dy = (2 * Y) / (N - 1)
+    total_prob_grid = float((psi_grid.pow(2).sum().item()) * dx * dy)
+    if total_prob_grid > 0.0:
+        psi_grid = psi_grid / (total_prob_grid ** 0.5)
 
     # Density diagnostics (peaks, COM, side masses)
     feats = compute_density_features(xs.cpu(), ys.cpu(), psi_grid, a_param=p.a)

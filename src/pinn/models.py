@@ -42,7 +42,7 @@ class SIRENLayer(nn.Module):
 
 
 class SIREN(nn.Module):
-    def __init__(self, in_features: int, hidden_features: int = 64, hidden_layers: int = 4, out_features: int = 1, w0: float = 30.0, w0_hidden: float = 1.0):
+    def __init__(self, in_features: int, hidden_features: int = 128, hidden_layers: int = 4, out_features: int = 1, w0: float = 30.0, w0_hidden: float = 1.0):
         super().__init__()
         layers = [SIRENLayer(in_features, hidden_features, w0, is_first=True)]
         for _ in range(hidden_layers - 1):
@@ -69,7 +69,7 @@ class FourierFeatures:
 
 
 class MLP(nn.Module):
-    def __init__(self, in_features: int, hidden_features: int = 64, hidden_layers: int = 4, out_features: int = 1, activation: nn.Module | None = None):
+    def __init__(self, in_features: int, hidden_features: int = 128, hidden_layers: int = 4, out_features: int = 1, activation: nn.Module | None = None):
         super().__init__()
         act = activation or nn.Tanh()
         layers = [nn.Linear(in_features, hidden_features), act]
