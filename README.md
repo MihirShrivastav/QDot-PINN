@@ -1,6 +1,6 @@
 # PINN for Double Quantum Dot (DQD) Eigenstates in GaAs
 
-This repository trains a Physics‑Informed Neural Network (PINN) to approximate single‑electron stationary states (ground and first excited) in a 2D double quantum dot potential relevant to GaAs devices. It emphasizes: a clear physical model, a mesh‑free PINN solution, informative visualizations/metrics, and reproducible runs.
+This repository contains implementation of a Physics-Informed Neural Network (PINN) paradigm for solving a single‑electron Schrödinger eigenproblem for a 2D double quantum well (dot) in GaAs. The goal is to obtain the lowest eigenstates (ground and first excited) and their densities without meshing or large matrix eigensolves. The method minimizes a Rayleigh–Ritz energy together with a PDE residual; optional terms enforce normalization, orthogonality to a reference state (for excited states), and parity in the symmetric (δ=0) case.
 
 
 ## 1) Physical problem
@@ -39,13 +39,16 @@ This PINN learns ψ(x, y) directly, avoiding spatial meshes and eigen‑solves o
    - E_RQ(ψ) = [∫ (|∇ψ|² + v ψ²) dΩ] / [∫ ψ² dΩ]
    - Uses gradient‑squared kinetic energy; stable and positive‑definite with soft walls.
 2. PDE residual (eigen‑equation consistency)
-   - Compute Hψ = −∇²ψ + vψ, project out the local Rayleigh estimate e_local, and penalize the mean squared residual of Hψ − e_local ψ at collocation points.
-3. Normalization penalty (optional but helpful)
+   - Compute Hψ = −∇²ψ + vψ, project out the local Rayleigh estimate e_local, and penalize the mean‑squared residual of Hψ − e_local ψ at collocation points.
+3. Normalization penalty (optional)
    - L_norm = (∫ ψ² dΩ − 1)², encouraging ∫ ψ² ≈ 1 on the quadrature grid.
-4. Orthogonality (excited states)
-   - L_ortho = [⟨ψ_new, ψ_ref⟩ / (||ψ_new||·||ψ_ref||)]² on the quadrature grid (squared, so lower is better). ψ_ref is a frozen ground‑state model.
+4. Orthogonality (for excited states)
+   - L_ortho = [⟨ψ_new, ψ_ref⟩ / (||ψ_new||·||ψ_ref||)]² on the quadrature grid; ψ_ref is a frozen ground‑state model.
+5. Parity (optional; useful for δ = 0)
+   - Even (GS): L_sym,even = ⟨(ψ(x,y) − ψ(−x,y))²⟩
+   - Odd (ES):  L_sym,odd  = ⟨(ψ(x,y) + ψ(−x,y))²⟩
 
-Total objective:  L = λ_rr·E_RQ + λ_pde·L_res + λ_norm·L_norm [+ λ_ortho·L_ortho]
+Total objective:  L = λ_rr·E_RQ + λ_pde·L_res + λ_norm·L_norm [+ λ_ortho·L_ortho] [+ λ_sym·L_sym]
 
 ### Optimization
 - Adam (first‑order) for many epochs.
@@ -101,6 +104,10 @@ python -m src.train_1e --state 1 \
 ```
 You may carry over `--nq`, `--nc`, `--lbfgs-iters`, etc. from the ground‑state run. The reference model should be the best (frozen) ground‑state weights.
 
+#### Parity options (symmetric case, δ = 0)
+- To steer GS toward even parity: add `--lam-sym-even 0.1` (typically small, 0.05–0.3)
+- To steer ES toward odd parity: add `--lam-sym-odd 0.1` together with `--lam-ortho` and a GS reference
+
 ### Viz‑only mode (no training; re‑generate outputs from saved weights)
 ```bash
 # Regenerate for a run directory (uses <outdir>/model_best.pt and <outdir>/config.json if present)
@@ -143,10 +150,9 @@ Viz‑only mode writes a separate `energies_eval.txt` to avoid clobbering the or
 - Higher `--nq` (quadrature) and `--nc` (collocation) improve accuracy but increase cost.
 - Use `--lbfgs-iters 0` to skip LBFGS for faster iteration; re‑enable later for refinement.
 - The plotting grid normalization makes density plots comparable across runs even if raw amplitude varies.
+- For symmetric double wells (δ ≈ 0), small parity weights help target the expected eigenmodes:
+  - GS even: `--lam-sym-even 0.05–0.3`
+  - ES odd:  `--lam-sym-odd 0.05–0.3` (use with `--lam-ortho` and a GS `--ref-model`)
 
 
-## Acknowledgments
-
-- PINN approach inspired by the Rayleigh–Ritz principle and physics‑informed residual minimization.
-- SIREN networks (sine activations) help represent oscillatory quantum states efficiently.
 
