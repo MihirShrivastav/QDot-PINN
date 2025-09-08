@@ -17,7 +17,7 @@ from .viz.plotting import plot_training_curves, plot_potential, plot_wavefunctio
 from .physics.units import GaAs, pretty_summary
 from .potentials.biquadratic import BiquadraticParams, from_targets, v_biq_factory
 from .pinn.models import SIREN
-from .pinn.losses import rayleigh_ritz_energy, pde_residual_loss, orthogonality_loss
+from .pinn.losses import rayleigh_ritz_energy, pde_residual_loss, orthogonality_loss, symmetry_penalty_odd, symmetry_penalty_even
 
 
 # ---- Helper functions for training loop ----
@@ -68,6 +68,8 @@ def train_one_state(
     lbfgs_iters: int = 200,
     lam_ortho: float = 0.0,
     ref_model: torch.nn.Module | None = None,
+    lam_sym_odd: float = 0.0,
+    lam_sym_even: float = 0.0,
 ) -> dict:
     device = device or xy_q.device
 
@@ -90,7 +92,12 @@ def train_one_state(
         E = rayleigh_ritz_energy(model, vfun_batch, xy_q, w_q)
         Lres = pde_residual_loss(model, vfun_batch, xy_c)
         Lnorm = normalization_penalty(model, xy_q, w_q)
-        loss = lam_rr * E + lam_pde * Lres + lam_norm * Lnorm
+        Lsym = 0.0
+        if lam_sym_odd and lam_sym_odd > 0.0:
+            Lsym = Lsym + lam_sym_odd * symmetry_penalty_odd(model, xy_q, w_q)
+        if lam_sym_even and lam_sym_even > 0.0:
+            Lsym = Lsym + lam_sym_even * symmetry_penalty_even(model, xy_q, w_q)
+        loss = lam_rr * E + lam_pde * Lres + lam_norm * Lnorm + Lsym
 
         # Optional orthogonality to reference (ground state) model
         overlap_val = None
@@ -136,7 +143,12 @@ def train_one_state(
             E2 = rayleigh_ritz_energy(model, vfun_batch, xy_q, w_q)
             R2 = pde_residual_loss(model, vfun_batch, xy_c2)
             N2 = normalization_penalty(model, xy_q, w_q)
-            loss2 = lam_rr * E2 + lam_pde * R2 + lam_norm * N2
+            Lsym2 = 0.0
+            if lam_sym_odd and lam_sym_odd > 0.0:
+                Lsym2 = Lsym2 + lam_sym_odd * symmetry_penalty_odd(model, xy_q, w_q)
+            if lam_sym_even and lam_sym_even > 0.0:
+                Lsym2 = Lsym2 + lam_sym_even * symmetry_penalty_even(model, xy_q, w_q)
+            loss2 = lam_rr * E2 + lam_pde * R2 + lam_norm * N2 + Lsym2
             if ref_model is not None and lam_ortho > 0.0:
                 with torch.no_grad():
                     psi_prev2 = ref_model(xy_q)
@@ -186,6 +198,10 @@ def parse_args() -> argparse.Namespace:
     # Training hyperparameters
     ap.add_argument("--epochs", type=int, default=1000)
     ap.add_argument("--hidden", type=int, default=128)
+    # Optional parity constraints (useful for δ=0):
+    ap.add_argument("--lam-sym-odd", type=float, default=0.0, help="Weight for odd-parity penalty: encourage psi(x,y) ≈ -psi(-x,y)")
+    ap.add_argument("--lam-sym-even", type=float, default=0.0, help="Weight for even-parity penalty: encourage psi(x,y) ≈ psi(-x,y)")
+
     ap.add_argument("--layers", type=int, default=6)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--nq", type=int, default=96, help="quadrature grid per axis")
@@ -437,6 +453,8 @@ def main():
         lbfgs_iters=args.lbfgs_iters,
         lam_ortho=(args.lam_ortho if ref_model is not None else 0.0),
         ref_model=ref_model,
+        lam_sym_odd=args.lam_sym_odd,
+        lam_sym_even=args.lam_sym_even,
     )
 
     # Evaluate final metrics (autograd needed for Laplacian)

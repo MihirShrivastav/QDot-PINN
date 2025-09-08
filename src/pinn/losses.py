@@ -60,3 +60,29 @@ def orthogonality_loss(psi_new: torch.Tensor, psi_prev: torch.Tensor, w_q: torch
     den = torch.sqrt(torch.sum(w_q * psi_new * psi_new) * torch.sum(w_q * psi_prev * psi_prev) + 1e-12)
     return (num / (den + 1e-12)) ** 2
 
+def symmetry_penalty_odd(fn: Callable[[torch.Tensor], torch.Tensor], xy_q: torch.Tensor, w_q: torch.Tensor) -> torch.Tensor:
+    """Penalty for odd parity (δ=0 ES): encourage ψ(x,y) ≈ -ψ(-x,y).
+    L = ⟨(ψ(x,y) + ψ(-x,y))²⟩_w
+    """
+    with torch.enable_grad():
+        xy_flip = xy_q.clone()
+        xy_flip[:, 0:1] = -xy_flip[:, 0:1]
+        psi = fn(xy_q)
+        psi_flip = fn(xy_flip)
+        diff = psi + psi_flip
+        return torch.sum(w_q * diff * diff) / (torch.sum(w_q) + 1e-12)
+
+
+def symmetry_penalty_even(fn: Callable[[torch.Tensor], torch.Tensor], xy_q: torch.Tensor, w_q: torch.Tensor) -> torch.Tensor:
+    """Penalty for even parity (δ=0 GS): encourage ψ(x,y) ≈ ψ(-x,y).
+    L = ⟨(ψ(x,y) - ψ(-x,y))²⟩_w
+    """
+    with torch.enable_grad():
+        xy_flip = xy_q.clone()
+        xy_flip[:, 0:1] = -xy_flip[:, 0:1]
+        psi = fn(xy_q)
+        psi_flip = fn(xy_flip)
+        diff = psi - psi_flip
+        return torch.sum(w_q * diff * diff) / (torch.sum(w_q) + 1e-12)
+
+
