@@ -1,16 +1,11 @@
-# Model Architecture: Networks used to approximate ψ(x, y)
+# Model Architecture: SIREN Network for ψ(x, y) Approximation
 
-This document explains the neural architectures implemented in `src/pinn/models.py` that approximate the real-valued wavefunction ψ(x, y) for the 2D, single-electron Schrödinger eigenproblem.
+This document explains the SIREN (Sinusoidal Representation Network) architecture implemented in `src/pinn/models.py` that approximates the real-valued wavefunction ψ(x, y) for the 2D, single-electron Schrödinger eigenproblem.
 
-We currently provide three variants:
-- SIREN: Sinusoidal Representation Network (default)
-- MLP: Standard multilayer perceptron with configurable activation (default: Tanh)
-- MLPFourier: Random Fourier feature encoder + MLP head
-
-All models take 2D inputs (x, y) and output a single scalar ψ. They are differentiable end-to-end; we compute ∇ψ, ∇²ψ via autograd for losses.
+The model takes 2D inputs (x, y) and outputs a single scalar ψ. It is differentiable end-to-end; we compute ∇ψ, ∇²ψ via autograd for the physics-informed loss functions.
 
 
-## 1) SIREN (Sinusoidal Representation Network)
+## SIREN Architecture
 
 SIREN is well-suited to representing oscillatory solutions and sharp interference patterns that occur in quantum mechanical eigenstates. It uses sine activations with frequency scaling.
 
@@ -44,40 +39,7 @@ Tips
 - Start with `hidden=128, layers=4` and scale up if residuals/energies plateau prematurely
 
 
-## 2) MLP (Tanh by default)
 
-A standard MLP with configurable activation. It is simpler but has spectral bias (tends to learn low frequencies first).
-
-- Module: `MLP`
-- Constructor signature:
-  - `MLP(in_features: int, hidden_features: int = 128, hidden_layers: int = 4, out_features: int = 1, activation: nn.Module | None = None)`
-  - Default activation is Tanh; you can pass `nn.SiLU()`, `nn.ReLU()`, etc.
-- Architecture: `[Linear → Act] × hidden_layers` with matching widths, then a final Linear to 1D
-
-When to consider MLP
-- For very smooth, slowly-varying potentials or coarse approximations
-- When you prefer simpler numerics (no sine frequencies to tune)
-
-Caveats
-- May struggle to capture high-frequency detail (nodes, interference fringes) unless made very deep/wide or combined with Fourier features
-
-
-## 3) MLPFourier (Random Fourier features + MLP)
-
-Encodes inputs with fixed random Fourier features z = [sin(2πxB), cos(2πxB)] before passing to an MLP.
-
-- Modules: `FourierFeatures`, `MLPFourier`
-- FourierFeatures
-  - `FourierFeatures.random(in_features: int, n_features: int = 64, sigma: float = 10.0)`
-  - Stores a matrix `B ∈ R^{in_features×n_features}`; not a learnable parameter by default (dataclass field)
-  - Encoding: `z = [sin(2π x B), cos(2π x B)] ∈ R^{2·n_features}`
-- MLPFourier
-  - `MLPFourier(in_features: int, ff: FourierFeatures, hidden_features: int = 128, hidden_layers: int = 4, out_features: int = 1)`
-  - Internally builds `MLP(in_features=2·n_features, ...)`
-
-When to use
-- If you want an alternative to SIREN but still need higher-frequency capacity
-- `sigma` controls the frequency band. Larger `sigma` ⇒ higher frequency embeddings (can be harder to optimize)
 
 
 ## Shapes, dtypes, and derivatives
@@ -88,44 +50,36 @@ When to use
 - Derivatives: we rely on autograd for ∇ψ and ∇²ψ (see `src/pinn/losses.py`). When computing derivatives, make sure `xy.requires_grad_(True)` is set as done in the loss functions
 
 
-## Choosing an architecture
+## Architecture Configuration
 
-Recommended defaults
-- Use SIREN for most runs: `hidden=128, layers=4, w0=30.0, w0_hidden=1.0`
-- If training is noisy/unstable, try reducing `w0` (e.g., 10–20) or gradient clipping (already enabled in training)
-- If you prefer ReLU/Tanh MLPs, start with the same width/depth and consider adding Fourier features if details are missing
+### Recommended defaults
+- Use SIREN with: `hidden_features=128, hidden_layers=6, w0=30.0, w0_hidden=1.0`
+- If training is noisy/unstable, try reducing `w0` (e.g., 10–20) or rely on gradient clipping (already enabled in training)
 
-Heuristics
-- More complex potentials or tighter wells ⇒ consider increasing width/layers
+### Scaling guidelines
+- More complex potentials or tighter wells → consider increasing `hidden_features` or `hidden_layers`
 - If residual stalls high and energy is off, scale `nq`/`nc` first (integration/collocation), then consider model capacity
+- Balance model size with computational cost and training stability
 
 
-## How training code picks the model
+## Usage in Training Code
 
-Currently, `src/train_1e.py` instantiates `SIREN` by default:
+The `src/train_1e.py` script instantiates SIREN by default:
 
+```python
+model = SIREN(
+    in_features=2, 
+    hidden_features=args.hidden, 
+    hidden_layers=args.layers, 
+    out_features=1
+).to(device)
+```
 
-````python
-model = SIREN(in_features=2, hidden_features=args.hidden, hidden_layers=args.layers, out_features=1).to(device)
-````
+The architecture parameters are controlled by command-line arguments:
+- `--hidden`: Sets `hidden_features` (default: 128)
+- `--layers`: Sets `hidden_layers` (default: 6)
 
-To try `MLP` instead (example):
-
-
-````python
-from src.pinn.models import MLP
-model = MLP(in_features=2, hidden_features=128, hidden_layers=4, out_features=1, activation=nn.Tanh()).to(device)
-````
-
-
-To try `MLPFourier` (example):
-
-
-````python
-from src.pinn.models import FourierFeatures, MLPFourier
-ff = FourierFeatures.random(in_features=2, n_features=64, sigma=10.0, device=device)
-model = MLPFourier(in_features=2, ff=ff, hidden_features=128, hidden_layers=4, out_features=1).to(device)
-````
+Note: The SIREN class constructor has `hidden_layers=4` as default, but the training script overrides this to 6.
 
 
 ## Notes on numerical stability
@@ -138,7 +92,8 @@ model = MLPFourier(in_features=2, ff=ff, hidden_features=128, hidden_layers=4, o
 
 ## Summary
 
-- SIREN is the default and best starting point for oscillatory quantum eigenstates
-- MLP is simpler but more biased to low frequencies; combine with Fourier features for more expressiveness
-- All models are differentiable, producing stable first/second derivatives required by the loss terms (Rayleigh quotient and PDE residual)
+SIREN is specifically chosen for this quantum mechanics application because:
+- Quantum eigenfunctions are inherently oscillatory, matching SIREN's sinusoidal nature
+- The smooth periodic activations provide stable higher-order derivatives essential for accurate Laplacian computation
+- Combined with double precision, SIREN delivers the numerical accuracy required for physics-informed neural networks solving eigenvalue problems
 
