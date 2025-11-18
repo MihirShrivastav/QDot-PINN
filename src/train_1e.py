@@ -68,6 +68,7 @@ def train_one_state(
     lbfgs_iters: int = 200,
     lam_ortho: float = 0.0,
     ref_model: torch.nn.Module | None = None,
+    ref_models: list[torch.nn.Module] | None = None,
     lam_sym_odd: float = 0.0,
     lam_sym_even: float = 0.0,
 ) -> dict:
@@ -76,9 +77,15 @@ def train_one_state(
     def vfun_batch(xy: torch.Tensor) -> torch.Tensor:
         return vectorized_biq_v(p, xy)
 
-    if ref_model is not None:
-        ref_model.eval()
-        for p_ref in ref_model.parameters():
+    # Collect and freeze reference models (if any)
+    refs: list[torch.nn.Module] = []
+    if ref_models is not None and len(ref_models) > 0:
+        refs.extend(ref_models)
+    elif ref_model is not None:
+        refs.append(ref_model)
+    for r in refs:
+        r.eval()
+        for p_ref in r.parameters():
             p_ref.requires_grad_(False)
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -99,15 +106,21 @@ def train_one_state(
             Lsym = Lsym + lam_sym_even * symmetry_penalty_even(model, xy_q, w_q)
         loss = lam_rr * E + lam_pde * Lres + lam_norm * Lnorm + Lsym
 
-        # Optional orthogonality to reference (ground state) model
+        # Optional orthogonality to reference model(s)
         overlap_val = None
-        if ref_model is not None and lam_ortho > 0.0:
+        if len(refs) > 0 and lam_ortho > 0.0:
             with torch.no_grad():
-                psi_prev = ref_model(xy_q)
+                prev_list = [r(xy_q) for r in refs]
             psi_new = model(xy_q)
-            overlap_sq = orthogonality_loss(psi_new, psi_prev, w_q)
-            loss = loss + lam_ortho * overlap_sq
-            overlap_val = torch.sqrt(overlap_sq + 1e-12)
+            overlap_term = 0.0
+            overlap_vals = []
+            for psi_prev in prev_list:
+                osq = orthogonality_loss(psi_new, psi_prev, w_q)
+                overlap_term = overlap_term + osq
+                overlap_vals.append(torch.sqrt(osq + 1e-12))
+            loss = loss + lam_ortho * overlap_term
+            if overlap_vals:
+                overlap_val = torch.max(torch.stack(overlap_vals))
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -127,7 +140,7 @@ def train_one_state(
             best["E"] = float(E.item())
             best["state_dict"] = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
-        if ep % 50 == 0 or ep == 1:
+        if ep % 10 == 0 or ep == 1:
             msg = f"[ep {ep:5d}] E={E.item():.6f}  Lres={Lres.item():.3e}  Lnorm={Lnorm.item():.3e}  |psi|^2={norm_val.item():.5f}"
             if overlap_val is not None:
                 msg += f"  overlap0={overlap_val.item():.3e}"
@@ -149,12 +162,15 @@ def train_one_state(
             if lam_sym_even and lam_sym_even > 0.0:
                 Lsym2 = Lsym2 + lam_sym_even * symmetry_penalty_even(model, xy_q, w_q)
             loss2 = lam_rr * E2 + lam_pde * R2 + lam_norm * N2 + Lsym2
-            if ref_model is not None and lam_ortho > 0.0:
+            if len(refs) > 0 and lam_ortho > 0.0:
                 with torch.no_grad():
-                    psi_prev2 = ref_model(xy_q)
+                    prev_list2 = [r(xy_q) for r in refs]
                 psi_new2 = model(xy_q)
-                overlap_sq2 = orthogonality_loss(psi_new2, psi_prev2, w_q)
-                loss2 = loss2 + lam_ortho * overlap_sq2
+                overlap_term2 = 0.0
+                for psi_prev2 in prev_list2:
+                    osq2 = orthogonality_loss(psi_new2, psi_prev2, w_q)
+                    overlap_term2 = overlap_term2 + osq2
+                loss2 = loss2 + lam_ortho * overlap_term2
             loss2.backward()
             return loss2
 
@@ -170,11 +186,16 @@ def train_one_state(
             history["Lres"].append(float(R2.detach().cpu()))
             history["Lnorm"].append(float(N2.detach().cpu()))
             history["NormValue"].append(float(norm_val2.detach().cpu()))
-            if ref_model is not None and lam_ortho > 0.0:
-                psi_prev_f = ref_model(xy_q)
+            if len(refs) > 0 and lam_ortho > 0.0:
                 psi_new_f = model(xy_q)
-                overlap_sq_f = orthogonality_loss(psi_new_f, psi_prev_f, w_q)
-                history["Overlap0"].append(float(torch.sqrt(overlap_sq_f + 1e-12).detach().cpu()))
+                max_ov = 0.0
+                with torch.no_grad():
+                    for r in refs:
+                        psi_prev_f = r(xy_q)
+                        overlap_sq_f = orthogonality_loss(psi_new_f, psi_prev_f, w_q)
+                        ov = torch.sqrt(overlap_sq_f + 1e-12)
+                        max_ov = max(max_ov, float(ov.detach().cpu()))
+                history["Overlap0"].append(max_ov)
             if e2f < best["E"]:
                 best["E"] = e2f
                 best["state_dict"] = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -214,6 +235,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--state", type=int, default=0, help="0 = ground state, 1 = first excited (orthogonal to ref)")
     ap.add_argument("--ref-model", type=str, default=None, help="Path to reference model (model_best.pt) for orthogonality constraint")
     ap.add_argument("--lam-ortho", type=float, default=10.0, help="Weight for orthogonality penalty when state>0")
+    ap.add_argument("--ref-models", type=str, nargs="+", default=None, help="One or more paths to reference models for orthogonality (e.g., GS and ES)")
+
     # System
     ap.add_argument("--device", type=str, default="cpu")
     ap.add_argument("--outdir", type=str, default="data/run_1e")
@@ -427,13 +450,23 @@ def main():
     xy_q = xy_q.to(device)
     w_q = w_q.to(device)
 
-    # Optional reference model for orthogonality (excited state)
+    # Optional reference model(s) for orthogonality (excited states)
     ref_model = None
-    if getattr(args, "state", 0) > 0 and getattr(args, "ref_model", None):
-        ref_model = SIREN(in_features=2, hidden_features=args.hidden, hidden_layers=args.layers, out_features=1).to(device)
-        ref_sd = torch.load(args.ref_model, map_location=device)
-        ref_model.load_state_dict(ref_sd)
-        ref_model.eval()
+    ref_models_list: list[torch.nn.Module] = []
+    if getattr(args, "state", 0) > 0:
+        if getattr(args, "ref_model", None):
+            ref_model = SIREN(in_features=2, hidden_features=args.hidden, hidden_layers=args.layers, out_features=1).to(device)
+            ref_sd = torch.load(args.ref_model, map_location=device)
+            ref_model.load_state_dict(ref_sd)
+            ref_model.eval()
+            ref_models_list.append(ref_model)
+        if getattr(args, "ref_models", None):
+            for path in args.ref_models:
+                r = SIREN(in_features=2, hidden_features=args.hidden, hidden_layers=args.layers, out_features=1).to(device)
+                rsd = torch.load(path, map_location=device)
+                r.load_state_dict(rsd)
+                r.eval()
+                ref_models_list.append(r)
 
     # Train state (ground if state=0, excited if state>0 with orthogonality)
     res = train_one_state(
@@ -451,8 +484,9 @@ def main():
         lam_norm=args.lam_norm,
         device=device,
         lbfgs_iters=args.lbfgs_iters,
-        lam_ortho=(args.lam_ortho if ref_model is not None else 0.0),
-        ref_model=ref_model,
+        lam_ortho=(args.lam_ortho if len(ref_models_list) > 0 else 0.0),
+        ref_model=None,
+        ref_models=ref_models_list,
         lam_sym_odd=args.lam_sym_odd,
         lam_sym_even=args.lam_sym_even,
     )

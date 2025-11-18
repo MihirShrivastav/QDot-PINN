@@ -29,15 +29,15 @@ class Config:
     v_b: float = 4.0         # Barrier height above the baseline
     sigma_b: float = 0.3     # Barrier width
     delta: float = 0.0       # Detuning (0.0 for symmetric wells)
-
+    regime = 0.6
     # PINN Model Architecture
     hidden_features: int = 128
     hidden_layers: int = 6
 
     # Training Hyperparameters
-    epochs_adam: int = 2000     # Number of epochs for the Adam optimizer
-    epochs_lbfgs: int = 400     # Max iterations for the L-BFGS optimizer
-    learning_rate: float = 5e-3  # Learning rate for Adam
+    epochs_adam: int = 500     # Number of epochs for the Adam optimizer
+    epochs_lbfgs: int = 100     # Max iterations for the L-BFGS optimizer
+    learning_rate: float = 1e-3  # Learning rate for Adam
 
     # Loss Function Weights (standard, no curriculum)
     lam_pde: float = 2.5
@@ -168,8 +168,19 @@ if __name__ == "__main__":
         Lres = pde_residual_loss(model, vfun_batch, xy_c)
         Lnorm = normalization_penalty(model, xy_q, w_q)
 
+        # NEW: Calculate boundary loss
+        xy_bc = sample_boundary(cfg.domain_size, cfg.nc // 4, device) # Sample boundary points
+        psi_bc = model(xy_bc)
+        Lbc = torch.mean(psi_bc**2) # Penalize non-zero psi at the boundary
+        if epoch < int(cfg.epochs_adam*cfg.regime):
+            lam_rr = 0
+            lam_pde = 0
 
-        loss = cfg.lam_rr * E + cfg.lam_pde * Lres + cfg.lam_norm * Lnorm
+        else:
+            lam_rr = cfg.lam_rr
+            lam_pde = cfg.lam_pde
+            
+        loss = lam_rr * E + lam_pde * Lres + cfg.lam_norm * Lnorm + cfg.lam_bc * Lbc
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
