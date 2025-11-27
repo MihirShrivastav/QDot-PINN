@@ -7,7 +7,7 @@ This repository implements a physics-informed neural solver for the 2D, single-e
 ## Physical Problem
 
 ### Device motivation
-- **Spin qubits**: Gate-defined GaAs DQDs confine a single electron in two adjacent minima; the energy splitting between bonding/antibonding states sets the tunnel coupling \(2t\) that enters the singlet–triplet qubit Hamiltonian.
+- **Spin qubits**: Gate-defined GaAs DQDs confine a single electron in two adjacent minima; the energy splitting between bonding/antibonding states sets the tunnel coupling $2t$ that enters the singlet–triplet qubit Hamiltonian.
 - **Soft confinement**: Fabricated devices never produce infinite square wells; electrostatic gates yield approximately quartic wells with finite walls. Capturing the correct curvature near each minimum is essential for matching measured spectra.
 - **Dimensional reduction**: We work in a 2D effective-mass formulation where lateral confinement dominates (vertical confinement is treated as frozen). The problem therefore reduces to solving the stationary Schrödinger equation in a rectangular domain.
 
@@ -15,22 +15,22 @@ This repository implements a physics-informed neural solver for the 2D, single-e
 $$
 \left[-\frac{\hbar^2}{2 m^\*}\left(\partial_{xx} + \partial_{yy}\right) + V(x,y)\right] \psi(x,y) = E \psi(x,y), \qquad (x,y) \in [-X,X]\times[-Y,Y].
 $$
-The envelope function \(\psi\) is normalised (\(\int |\psi|^2 = 1\)) and must decay near the domain boundary. We embed the material parameters through dimensionless scaling so that the learned eigenvalues can be mapped back to meV via \(E_0 = 0.6318\) meV for GaAs (\(m^\*=0.067 m_0\)).
+The envelope function $\psi$ is normalised ($\int |\psi|^2 = 1$) and must decay near the domain boundary. We embed the material parameters through dimensionless scaling so that the learned eigenvalues can be mapped back to meV via $E_0 = 0.6318$ meV for GaAs ($m^\*=0.067 m_0$).
 
 ### Potential parameters and their physical role
-- **\(a\)**: controls the separation between the left and right wells; increasing \(a\) lowers tunnel coupling and modifies the splitting between GS and ES1.
-- **\(c_4\)** / **\(\hbar\omega_x\)**: set the quartic curvature along \(x\). We usually specify the desired harmonic energy \(\hbar\omega_x\) and convert it to \(c_4\) so that the Taylor expansion around each minimum matches the measured orbital spacing.
-- **\(c_{2y}\)** / **\(\hbar\omega_y\)**: determine confinement along \(y\). Larger values mimic a tighter electrostatic channel and raise the energy of vertically excited states (e.g., ES2 in our reference run).
-- **\(\Delta\)**: a linear detuning term that models differential gate voltages between the two dots; turning it on breaks parity and shifts the charge distribution.
+- **$a$**: controls the separation between the left and right wells; increasing $a$ lowers tunnel coupling and modifies the splitting between GS and ES1.
+- **$c_4$** / **$\hbar\omega_x$**: set the quartic curvature along $x$. We usually specify the desired harmonic energy $\hbar\omega_x$ and convert it to $c_4$ so that the Taylor expansion around each minimum matches the measured orbital spacing.
+- **$c_{2y}$** / **$\hbar\omega_y$**: determine confinement along $y$. Larger values mimic a tighter electrostatic channel and raise the energy of vertically excited states (e.g., ES2 in our reference run).
+- **$\Delta$**: a linear detuning term that models differential gate voltages between the two dots; turning it on breaks parity and shifts the charge distribution.
 
-### Why these loss terms?
-- **Rayleigh–Ritz energy** \(E_{\text{RR}}\): Provides a variational upper bound on the true eigenvalue and enforces global behaviour. Minimising this term ensures accurate energies even if the PDE residual momentarily fluctuates.
-- **PDE residual** \(L_{\text{res}}\): Enforces the Schrödinger equation locally at collocation points, guaranteeing that \(\psi\) satisfies the differential operator, especially in regions where the Rayleigh quotient alone could be satisfied with the wrong shape.
-- **Normalization penalty** \(L_{\text{norm}}\): Maintains \(\int |\psi|^2 = 1\), which fixes the scale of \(\psi\) and stabilises the Rayleigh quotient.
-- **Orthogonality penalty** \(L_{\text{ortho}}\): Enforces \(\langle \psi_n | \psi_m \rangle = 0\) for \(n\ne m\), allowing consecutive excited states to be trained sequentially without collapsing onto previously discovered modes.
-- **Parity penalties** \(L_{\text{sym-even}}, L_{\text{sym-odd}}\): For symmetric potentials (\(\Delta=0\)), small penalties accelerate convergence to the expected even/odd modes, reducing the chance of hybridised solutions when eigenvalues are clustered.
+### Why these loss termso
+- **Rayleigh–Ritz energy** $E_{\text{RR}}$: Provides a variational upper bound on the true eigenvalue and enforces global behaviour. Minimising this term ensures accurate energies even if the PDE residual momentarily fluctuates.
+- **PDE residual** $L_{\text{res}}$: Enforces the Schrödinger equation locally at collocation points, guaranteeing that $\psi$ satisfies the differential operator, especially in regions where the Rayleigh quotient alone could be satisfied with the wrong shape.
+- **Normalization penalty** $L_{\text{norm}}$: Maintains $\int |\psi|^2 = 1$, which fixes the scale of $\psi$ and stabilises the Rayleigh quotient.
+- **Orthogonality penalty** $L_{\text{ortho}}$: Enforces $\langle \psi_n | \psi_m \rangle = 0$ for $n\ne m$, allowing consecutive excited states to be trained sequentially without collapsing onto previously discovered modes.
+- **Parity penalties** $L_{\text{sym-even}}, L_{\text{sym-odd}}$: For symmetric potentials ($\Delta=0$), small penalties accelerate convergence to the expected even/odd modes, reducing the chance of hybridised solutions when eigenvalues are clustered.
 
-These terms are weighted via `--lam-*` hyperparameters so that each contribution reflects its physical priority (e.g., Rayleigh–Ritz dominates energy accuracy, while a moderate `lam_pde` enforces local fidelity). The values in `results/` were tuned to balance residuals in the \(10^{-2}\)–\(10^{-3}\) range with stable normalization.
+These terms are weighted via `--lam-*` hyperparameters so that each contribution reflects its physical priority (e.g., Rayleigh–Ritz dominates energy accuracy, while a moderate `lam_pde` enforces local fidelity). The values in `results/` were tuned to balance residuals in the $10^{-2}$–$10^{-3}$ range with stable normalization.
 
 ### Outputs
 - Energy spectrum in both dimensionless units and meV.
@@ -48,7 +48,7 @@ These terms are weighted via `--lam-*` hyperparameters so that each contribution
   - Normalization penalty.
   - Orthogonality + optional parity penalties for excited states.
 - **Optimization**: Adam (2k epochs in notebook setting) + L-BFGS refinement.
-- **Diagnostics**: history logging, density features, potential snapshots, and saved grids of \(\psi(x,y)\).
+- **Diagnostics**: history logging, density features, potential snapshots, and saved grids of $\psi(x,y)$.
 
 ---
 
@@ -103,7 +103,7 @@ These terms are weighted via `--lam-*` hyperparameters so that each contribution
 
 ## Reference Experiment (`results/`)
 
-We ran the notebook on Colab with GaAs parameters \(a=1.5\), \(\hbar\omega_x=3\) meV, \(\hbar\omega_y=5\) meV, \(\Delta=0\), domain \([-4,4]^2\), \(n_q=128\), \(n_c=8192\), 2000 Adam epochs, and 200 L-BFGS iterations. The produced artifacts are versioned in `results/`, mirroring the structure we expect from anyone running the notebook.
+We ran the notebook on Colab with GaAs parameters $a=1.5$, $\hbar\omega_x=3$ meV, $\hbar\omega_y=5$ meV, $\Delta=0$, domain $[-4,4]^2$, $n_q=128$, $n_c=8192$, 2000 Adam epochs, and 200 L-BFGS iterations. The produced artifacts are versioned in `results/`, mirroring the structure we expect from anyone running the notebook.
 
 ### Visual summary
 
@@ -124,11 +124,11 @@ We ran the notebook on Colab with GaAs parameters \(a=1.5\), \(\hbar\omega_x=3\)
 
 ### Eigenvalue summary
 
-| State | \(E\) (dimensionless) | \(E\) (meV) | Splitting to previous state (meV) |
-|-------|----------------------:|------------:|----------------------------------:|
-| GS    | 5.9129               | 3.736       | — |
-| ES1   | 6.2915               | 3.975       | 0.239 (ΔE\_{ES1−GS}) |
-| ES2   | 8.9098               | 5.630       | 1.654 (ΔE\_{ES2−ES1}) |
+| State | E (dimensionless) | E (meV) | Splitting to previous state (meV) |
+|-------|------------------:|--------:|----------------------------------:|
+| GS    | 5.9129           | 3.736   | -- |
+| ES1   | 6.2915           | 3.975   | 0.239 (Delta E: ES1-GS) |
+| ES2   | 8.9098           | 5.630   | 1.654 (Delta E: ES2-ES1) |
 
 Source files: `results/gs/energy_gs.json`, `results/es1/energy_es1.json`, `results/es2/energy_es2.json`.
 
@@ -160,7 +160,7 @@ Each folder contains `density_features.json` (probability, COM, side masses, top
 
 - Use `results/*/config.json` and `params.txt` to capture every hyperparameter and potential coefficient of the run.
 - `history.json` files allow plotting convergence statistics across experiments.
-- The `potential/` figures provide context when changing \(a\), \(\hbar\omega_x\), \(\hbar\omega_y\), or detuning.
+- The `potential/` figures provide context when changing $a$, $\hbar\omega_x$, $\hbar\omega_y$, or detuning.
 - To explore different excited states or asymmetries, modify the notebook configuration cell, rerun, and compare against the baseline figures above.
 
 ---
@@ -177,4 +177,4 @@ Each folder contains `density_features.json` (probability, COM, side masses, top
 }
 ```
 
-Questions or collaboration ideas? Please open an issue in this repository.
+Questions or collaboration ideaso Please open an issue in this repository.
