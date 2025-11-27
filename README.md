@@ -12,9 +12,9 @@ This repository implements a physics-informed neural solver for the 2D, single-e
 - **Dimensional reduction**: We work in a 2D effective-mass formulation where lateral confinement dominates (vertical confinement is treated as frozen). The problem therefore reduces to solving the stationary Schrödinger equation in a rectangular domain.
 
 ### Governing equation
-\[
-\left[-\frac{\hbar^2}{2 m^\*}(\partial_{xx} + \partial_{yy}) + V(x,y)\right] \psi(x,y) = E \psi(x,y), \qquad (x,y) \in [-X,X]\times[-Y,Y].
-\]
+$$
+\left[-\frac{\hbar^2}{2 m^\*}\left(\partial_{xx} + \partial_{yy}\right) + V(x,y)\right] \psi(x,y) = E \psi(x,y), \qquad (x,y) \in [-X,X]\times[-Y,Y].
+$$
 The envelope function \(\psi\) is normalised (\(\int |\psi|^2 = 1\)) and must decay near the domain boundary. We embed the material parameters through dimensionless scaling so that the learned eigenvalues can be mapped back to meV via \(E_0 = 0.6318\) meV for GaAs (\(m^\*=0.067 m_0\)).
 
 ### Potential parameters and their physical role
@@ -104,6 +104,18 @@ These terms are weighted via `--lam-*` hyperparameters so that each contribution
 ## Reference Experiment (`results/`)
 
 We ran the notebook on Colab with GaAs parameters \(a=1.5\), \(\hbar\omega_x=3\) meV, \(\hbar\omega_y=5\) meV, \(\Delta=0\), domain \([-4,4]^2\), \(n_q=128\), \(n_c=8192\), 2000 Adam epochs, and 200 L-BFGS iterations. The produced artifacts are versioned in `results/`, mirroring the structure we expect from anyone running the notebook.
+
+### Visual summary
+
+| Potential landscape | Combined densities |
+| --- | --- |
+| ![Biquadratic potential contour](results/potential/potential_density.png) | ![All states comparison](results/all_states.png) |
+
+| State | Density | Training history |
+| --- | --- | --- |
+| GS | ![GS density](results/gs/gs_density.png) | ![GS history](results/gs/gs_training_history.png) |
+| ES1 | ![ES1 density](results/es1/es1_density.png) | ![ES1 history](results/es1/es1_training_history.png) |
+| ES2 | ![ES2 density](results/es2/es2_density.png) | ![ES2 history](results/es2/es2_training_history.png) |
 
 ### Potential inspection
 
