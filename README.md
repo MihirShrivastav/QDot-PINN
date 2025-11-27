@@ -1,232 +1,131 @@
-# PINN for Double Quantum Dot (DQD) Eigenstates in GaAs
+# PINN Solver for Double Quantum Dot Eigenstates
 
-This repository implements a specialized Physics-Informed Neural Network (PINN) approach for solving the 2D Schrödinger eigenvalue problem in double quantum dots. Our method combines **SIREN networks** with a **hybrid Rayleigh-Ritz/PDE-residual formulation** to efficiently learn oscillatory quantum eigenstates without traditional meshing or matrix diagonalization.
+## Abstract
+This repository implements a physics-informed neural solver for the two-dimensional, single-electron Schrodinger eigenvalue problem in GaAs double quantum dots. The training loop works in dimensionless units, embeds the GaAs material parameters, and targets the low-lying bound states that determine tunnelling rates and charge localization in spin-qubit devices. The solver is purpose-built for oscillatory quantum states: it relies on sinusoidal representation networks (SIREN), a Rayleigh-Ritz variational loss, and local PDE residual constraints. The same formulation is available both as modular Python modules (`src/`) and as a standalone Colab notebook (`train_dqd_colab.ipynb`).
 
-## Key Innovation: Why This Approach Works
+## Scientific Motivation
 
-**SIREN for Quantum Mechanics**: We use Sinusoidal Representation Networks (SIREN) because quantum wavefunctions are inherently oscillatory. Unlike standard MLPs that suffer from spectral bias (learning low frequencies first), SIREN's sinusoidal activations naturally capture high-frequency oscillations, interference patterns, and sharp nodal structures that characterize quantum eigenstates.
+- **Device design**: Accurate estimates of tunnel coupling, detuning response, and spatial localization are needed when engineering GaAs double quantum dots for singlet-triplet qubits.
+- **Soft potentials**: Experimental devices rarely realize hard-wall potentials; using smooth biquadratic wells makes soft boundaries an explicit modelling choice rather than a nuisance.
+- **Mesh-free eigenproblem**: Classical solvers require costly remeshing whenever the potential changes. The PINN formulation handles new potentials or detuning values by retraining a continuous network.
 
-**Hybrid Loss Formulation**: Our approach combines:
-- **Rayleigh-Ritz energy minimization** (variational principle) for robust eigenvalue approximation
-- **PDE residual enforcement** for local Schrödinger equation satisfaction
-- **Orthogonality constraints** for systematic excited state computation
-
-This eliminates the need for curriculum learning or frequency ramping strategies required by conventional PINNs, enabling direct training on the full-frequency spectrum of quantum solutions.
-
-
-## 1) Physical problem
-
-- We solve the time‑independent Schrödinger eigenproblem for a single electron in 2D:
-  - Dimensionless form: find (ψ, E) such that
-    -Hψ + v(x, y) ψ = E ψ on a finite box Ω = [−X, X] × [−Y, Y]
-  - We use “soft walls” (no hard boundary conditions); the confining potential grows outside the wells to localize ψ within Ω.
-- Potential (biquadratic double well; implemented):
-  - v(x, y) = c4 (x² − a²)² + c2y y² + δ x
-    - a controls well separation
-    - c4, c2y set the x and y curvatures (via target harmonic energies if desired)
-    - δ is an optional detuning along x
-- Materials and non‑dimensionalization (GaAs defaults):
-  - Characteristic length L0 = 30 nm
-  - Energy scale E0 ≈ 0.6318 meV
-  - Dimensionless equations use x′ = x/L0, E′ = E/E0, etc. A handy summary is printed at run start.
-
-**Goal**: Learn low-lying eigenstates (ground and first excited) and extract device-relevant parameters like tunnel coupling, energy splitting, and charge localization — all without traditional meshing or matrix diagonalization.
-
-## Why This Approach Outperforms Alternatives
-
-**vs. Traditional Finite Difference/Element Methods**:
-- ✅ **No meshing**: Continuous representation adapts to any potential shape
-- ✅ **No matrix storage**: Memory scales with network size, not grid resolution  
-- ✅ **Smooth derivatives**: Analytical gradients via autograd, no numerical differentiation errors
-- ✅ **Rapid iteration**: Change potential parameters without remeshing/reassembly
-
-**vs. Standard PINN Approaches**:
-- ✅ **Direct high-frequency learning**: SIREN eliminates spectral bias without curriculum
-- ✅ **Robust eigenvalue computation**: Rayleigh-Ritz provides variational bound, not just PDE satisfaction
-- ✅ **Systematic excited states**: Orthogonality constraints prevent mode collapse
-- ✅ **Physical insight**: Energy-based training connects to quantum mechanical principles
-
-**vs. Curriculum/Frequency-Ramping PINNs**:
-- ✅ **No frequency scheduling**: SIREN learns all scales simultaneously
-- ✅ **Fewer hyperparameters**: No need to tune ramping schedules or frequency bands
-- ✅ **Faster convergence**: Direct optimization without multi-stage training
-
-
-## 2) Our PINN Architecture and Training Strategy
-
-### Why SIREN Networks Excel for Quantum Problems
-
-**Spectral Bias Solution**: Traditional neural networks learn low frequencies first, requiring careful curriculum learning for oscillatory PDEs. SIREN's sinusoidal activations `sin(w₀x)` naturally represent the Fourier components of quantum wavefunctions, enabling direct learning of:
-- Rapid oscillations in kinetic-dominated regions
-- Sharp interference fringes at potential barriers  
-- Precise nodal structures in excited states
-- Smooth exponential decay in classically forbidden regions
-
-**Accurate Higher-Order Derivatives**: Quantum mechanics requires precise second derivatives (Laplacian) for kinetic energy. SIREN's smooth periodic activations provide stable, accurate ∇²ψ computation via automatic differentiation, crucial for eigenvalue accuracy.
-
-### Network Architecture
-- **Model**: SIREN with frequency-scaled sine activations
-- **Input**: 2D coordinates (x, y) in dimensionless units
-- **Output**: Real-valued wavefunction ψ(x, y)
-- **Architecture**: Configurable depth/width (default: 6 layers × 128 neurons)
-- **Precision**: Double precision (float64) for derivative stability
-
-### Hybrid Physics-Informed Loss Strategy
-
-Our approach combines **global energy minimization** with **local PDE enforcement** for robust eigenstate learning:
-
-#### 1. **Rayleigh-Ritz Energy** (Primary Objective)
+## Governing Problem
+We solve the stationary Schrodinger equation in a finite rectangle `[-X, X] x [-Y, Y]`. The implemented biquadratic potential is
 ```
-E_RR(ψ) = [∫ (|∇ψ|² + v ψ²) dΩ] / [∫ ψ² dΩ]
+V(x,y) = c4 (x^2 - a^2)^2 + c2y y^2 + delta * x,
 ```
-- **Variational principle**: Minimizing energy drives toward true eigenstates
-- **Scale-invariant**: Ratio form handles normalization automatically  
-- **Gradient-squared kinetic**: Avoids boundary terms, works with soft walls
-- **Global accuracy**: Computed on structured quadrature grid (nq × nq)
+where `a` controls dot separation, `c4` and `c2y` set the curvatures (or equivalently the target harmonic energies `--hbar-omega-x` and `--hbar-omega-y`), and `delta` applies an electric-field detuning. `src/physics/units.py` provides the GaAs scaling (length 30 nm, energy 0.6318 meV), so energies reported by the solver can be converted back to physical units by multiplication.
 
-#### 2. **PDE Residual** (Local Constraint)
-```
-L_residual = ⟨|Hψ - E_local ψ|²⟩_collocation
-```
-- **Schrödinger enforcement**: Ensures ψ satisfies eigenvalue equation locally
-- **Adaptive sampling**: Random collocation points (nc per epoch) capture fine details
-- **Projected residual**: Removes local energy to prevent trivial solutions
+## Method Overview
 
-#### 3. **Excited State Handling** (Deflation Method)
-```
-L_ortho = [⟨ψ_new, ψ_ref⟩ / (||ψ_new|| ||ψ_ref||)]²
-```
-- **Systematic orthogonality**: Enforces ⟨ψ_n|ψ_m⟩ = 0 for n ≠ m
-- **Frozen reference**: Ground state model provides deflation constraint
-- **No mode collapse**: Prevents excited states from converging to ground state
+### SIREN PINN architecture
+- Inputs: coordinates `(x, y)` in dimensionless form.
+- Model: depth 6, width 128 sine-activated layers (`src/pinn/models.py`).
+- Output: scalar wavefunction `psi(x, y)` evaluated in double precision to stabilise second derivatives.
 
-#### 4. **Optional Constraints**
-- **Normalization**: L_norm = (∫ ψ² dΩ - 1)² maintains unit norm
-- **Symmetry**: Parity constraints for symmetric potentials (δ = 0)
+### Loss formulation
+- **Rayleigh-Ritz quotient** for global eigenvalue accuracy.
+- **PDE residual** on random collocation points to ensure local equation satisfaction.
+- **Normalization** term to keep the integrated probability equal to one.
+- **Orthogonality** penalties against previously trained states when solving for excited modes.
+- **Parity priors** (optional) when the device is symmetric (`delta = 0`).
 
-**Total Loss**: L = λ_rr·E_RR + λ_pde·L_residual + λ_norm·L_norm + [λ_ortho·L_ortho] + [λ_sym·L_sym]
+### Training strategy
+1. **Adam phase** (default 1000 epochs) with clipped gradients for coarse convergence.
+2. **L-BFGS refinement** (default 200 steps) for sharp minima.
+3. **Diagnostics**: energy history, residual decay, normalization drift, and overlap with reference states are logged every epoch.
 
-### Training Strategy
+### Outputs and diagnostics
+Each training run (see `--outdir`) stores
+- `model_best.pt`, `config.json`, and `params.txt` for reproducibility.
+- `energies.txt`, `history.{json,csv}`, and `density_features.{json,csv}`.
+- Visualization assets: `psi_density.png`, `potential.png`, and optional training curves.
+- `psi_grid.pt` for downstream numerical analysis.
 
-**Two-Stage Optimization**:
-1. **Adam phase**: First-order optimization for broad convergence (1000+ epochs)
-2. **L-BFGS refinement**: Second-order polish for sharp minima (200 iterations)
+## Repository Layout
+- `src/` - Core PINN implementation (training entry points, models, physics helpers, visualization utilities).
+- `train_dqd_colab.ipynb` - Self-contained notebook that re-implements the entire solver in 16 cells.
+- `COLAB_NOTEBOOK_README.md` - Additional background on the notebook flow.
+- `data/` - Default location for training outputs.
+- `docs/` - Extended documentation and figures.
 
-**Key Advantages of Our Approach**:
-- **No curriculum needed**: SIREN handles full frequency spectrum from start
-- **Stable derivatives**: Double precision + smooth activations ensure accurate ∇²ψ
-- **Soft boundaries**: Potential confinement eliminates boundary condition complexity
-- **Systematic excited states**: Orthogonality constraints enable reliable higher eigenstate computation
+## Environment and Setup
+1. Install Python 3.10+ and PyTorch 2.x (CUDA optional).
+2. Create an isolated environment, e.g.
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # PowerShell: .venv\Scripts\Activate.ps1
+   pip install --upgrade pip
+   pip install torch numpy scipy matplotlib seaborn tqdm
+   ```
+3. (Optional) Install the repo as a package to enable module imports:
+   ```bash
+   pip install -e .
+   ```
+   If you skip this step, run CLI commands with `python -m src.train_1e ...` from the repository root so relative imports resolve.
 
-**Computational Efficiency**:
-- **Mesh-free**: No spatial discretization or matrix assembly
-- **Scalable**: O(N) complexity in network parameters, not grid points
-- **GPU-friendly**: Fully differentiable, vectorized operations
-
-
-## 3) Quantum Mechanical Results and Physical Insights
-
-### Eigenstate Characteristics
-- **Ground state (bonding)**: Two lobes at (±a, 0) with even parity, no nodal line
-- **First excited (antibonding)**: Nodal line at x=0, odd parity, higher energy
-- **Energy splitting**: ΔE = E₁ - E₀ ≈ 2t (tunnel coupling) for symmetric dots
-- **Detuning effects**: δ ≠ 0 creates avoided crossings, charge transfer
-
-### Training Diagnostics
-- **Energy convergence**: Variational bound ensures E ≥ E_exact
-- **PDE residual**: Target 10⁻² to 10⁻¹ (balance accuracy vs. computational cost)
-- **Normalization**: ∫|ψ|² ≈ 1 (quantum probability conservation)
-- **Orthogonality**: ⟨ψ₀|ψ₁⟩ ≈ 0 for excited states (quantum mechanical requirement)
-
-### Physical Observables (Automated Analysis)
-Our framework automatically extracts device-relevant parameters:
-- **Tunnel coupling**: t ≈ (E₁ - E₀)/2 for symmetric case
-- **Charge localization**: Left/right dot populations from ∫|ψ|² over regions
-- **Density peaks**: Wavefunction maxima near potential minima (±a, 0)
-- **Center of mass**: ⟨x⟩, ⟨y⟩ for charge distribution analysis
-- **Energy scales**: Dimensionless → physical units via E₀ ≈ 0.63 meV (GaAs, L₀=30nm)
-
-### Validation Metrics
-- **Eigenvalue accuracy**: Relative error vs. finite difference baselines
-- **Wavefunction fidelity**: Overlap with reference solutions
-- **Physical consistency**: Energy ordering, symmetry properties, normalization
-
-
-## How to run
-
-All commands should be run from the repository root.
+## Command-Line Workflow
+All commands are issued from the repository root.
 
 ### Ground state (state = 0)
 ```bash
-python -m src.train_1e --outdir data/run_1e_gs --device cpu
+python -m src.train_1e   --outdir data/run_1e_gs   --device cuda   --nq 128   --nc 4096   --epochs 1200   --lbfgs-iters 200
 ```
-Common options:
-- Use CUDA: `--device cuda`
-- Quadrature resolution: `--nq 96`
-- Collocation per epoch: `--nc 4096`
-- LBFGS refinement: `--lbfgs-iters 200` (set 0 to disable)
-- Potential via targets: `--a 1.5 --hbar-omega-x 3.0 --hbar-omega-y 5.0 --delta 0.0`
-- Or explicit coefficients: `--c4 <..> --c2y <..> --delta <..>`
+Key options:
+- Potential: either supply `--a --hbar-omega-x --hbar-omega-y --delta` or give explicit `--c4 --c2y --delta`.
+- Loss weights: `--lam-rr`, `--lam-pde`, `--lam-norm` tune the balance between Rayleigh energy and residual terms.
+- Numerical quadrature: `--nq` sets the Gauss-Lobatto grid per axis; `--nc` controls random collocation samples.
 
-### First excited state (orthogonal to ground; state = 1)
+### First excited state (state = 1)
 ```bash
-python -m src.train_1e --state 1 \
-  --ref-model data/run_1e_gs/model_best.pt \
-  --outdir data/run_1e_es \
-  --lam-ortho 10.0 \
-  --device cpu
+python -m src.train_1e   --state 1   --ref-model data/run_1e_gs/model_best.pt   --lam-ortho 10.0   --lam-sym-odd 0.1   --outdir data/run_1e_es1
 ```
-You may carry over `--nq`, `--nc`, `--lbfgs-iters`, etc. from the ground‑state run. The reference model should be the best (frozen) ground‑state weights.
+Provide the ground-state weights via `--ref-model` (or multiple references using `--ref-models`) so orthogonality and parity terms suppress mode collapse. Higher excited states reuse the same command with additional references.
 
-#### Parity options (symmetric case, δ = 0)
-- To steer GS toward even parity: add `--lam-sym-even 0.1` (typically small, 0.05–0.3)
-- To steer ES toward odd parity: add `--lam-sym-odd 0.1` together with `--lam-ortho` and a GS reference
-
-### Viz‑only mode (no training; re‑generate outputs from saved weights)
+### Visualization-only regeneration
 ```bash
-# Regenerate for a run directory (uses <outdir>/model_best.pt and <outdir>/config.json if present)
 python -m src.train_1e --viz-only --outdir data/run_1e_gs
-
-# Or specify a custom weights path
-python -m src.train_1e --viz-only --outdir data/run_1e_gs --model path/to/model_best.pt
 ```
-This writes `energies_eval.txt`, `psi_density.png`, `potential.png`, `density_features.json/csv`, and `psi_grid.pt` without retraining.
+This reloads `model_best.pt`, recomputes energy diagnostics, and writes `energies_eval.txt`, updated density maps, and grid data without retraining. You may override the weights path with `--model path/to/model.pt`.
 
+## Consolidated Notebook Workflow
+`train_dqd_colab.ipynb` contains the entire pipeline-imports, model, training loops, diagnostics, and visualization-embedded inside a single notebook. Use it when you want a one-file experiment (for example on Google Colab) without cloning the repo.
 
-## Outputs and logs
+### Running on Google Colab
+1. Visit <https://colab.research.google.com/>.
+2. Upload `train_dqd_colab.ipynb` (File -> Upload notebook) or open it directly from GitHub (File -> Open notebook -> GitHub).
+3. Enable a GPU runtime (Runtime -> Change runtime type -> GPU) for faster execution.
+4. Execute **Runtime -> Run all**. The notebook trains ground, first excited, and second excited states sequentially, saving artifacts in `colab_results/` alongside comparison plots.
 
-Each run writes into `--outdir` (default `data/run_1e`):
+### Running locally (JupyterLab)
+1. Install JupyterLab inside your environment (`pip install jupyterlab`).
+2. Launch `jupyter lab`, open `train_dqd_colab.ipynb`, and run the cells in order. All dependencies (PyTorch, numpy, matplotlib) are installed directly within the notebook, so no project modules are required.
 
-- energies.txt
-  - `E_final`, `residual_final`, `norm_value_final`, `norm_penalty_final`, `E_best`
-- history.json / history.csv
-  - Per‑epoch `E`, `Lres`, `Lnorm`, `NormValue` (∫ψ²), and `Overlap0` (if applicable)
-- psi_density.png
-  - Heatmap of |ψ|² with contour overlays and markers at (±a, 0); normalized on the plotting grid for clarity
-- potential.png
-  - Heatmap of v(x, y)
-- density_features.json and density_features.csv
-  - Quantitative summary: peaks, center of mass, side masses, minima densities, total_prob
-- psi_grid.pt
-  - Torch tensor with x, y, and psi on the plotting grid
-- config.json
-  - Captures key parameters (potential, box size, quadrature, model hyperparameters)
-- model_best.pt
-  - Best weights snapshot (lowest observed E during training)
+### Notebook contents
+- Cells 1-5: physics constants, SIREN definition, and helper utilities.
+- Cells 6-8: configuration cell exposing all hyperparameters (epochs, quadrature size, penalty weights, detuning, etc.).
+- Cells 9-16: sequential training/visualization for the ground state, first excited, and second excited states, plus an aggregated summary table and combined plot.
 
-Viz‑only mode writes a separate `energies_eval.txt` to avoid clobbering the original `energies.txt`.
+## Interpreting Results
+- **Energy metrics**: `energies.txt` and `energies_eval.txt` list both instantaneous and best-observed Rayleigh quotients. Values are dimensionless but can be multiplied by 0.6318 meV to map back to GaAs units.
+- **Density diagnostics**: `density_features.*` captures center of mass, left/right dot probability, and dominant peaks to quantify localization and tunnel coupling.
+- **Training history**: inspect `history.csv` to verify residual convergence, normalization stability, and orthogonality (Overlap0 column) for excited states.
 
+## Reproducibility
+- All random sampling uses PyTorch's RNG; set `PYTORCH_SEED` before launching a run to make collocation draws deterministic.
+- `config.json` stores the exact CLI arguments, potential parameters, and quadrature settings per run.
+- The notebook version prints the configuration dictionary before each phase, making it easy to cross-reference with command-line experiments.
 
-## Tips and troubleshooting
+## Citation
+If this solver contributes to your research, please cite it as
+```
+@misc{pinn_dqd_2024,
+  title={Physics-Informed Neural Solver for Double Quantum Dot Eigenstates},
+  author={Mihir Shrivastava},
+  year={2025},
+  howpublished={https://github.com/MihirShrivastav/QDot-PINN},
+  note={SIREN PINN implementation for GaAs DQDs}
+}
+```
 
-- If NormValue drifts far from 1 during training, increase `--lam-norm` (e.g., 50–200) or rely more on the scale‑invariant Rayleigh quotient by down‑weighting `--lam-norm` later in training.
-- If the excited state looks too similar to the ground state, raise `--lam-ortho` moderately (e.g., 10→50), and ensure you point to the correct ground‑state `--ref-model`.
-- Higher `--nq` (quadrature) and `--nc` (collocation) improve accuracy but increase cost.
-- Use `--lbfgs-iters 0` to skip LBFGS for faster iteration; re‑enable later for refinement.
-- The plotting grid normalization makes density plots comparable across runs even if raw amplitude varies.
-- For symmetric double wells (δ ≈ 0), small parity weights help target the expected eigenmodes:
-  - GS even: `--lam-sym-even 0.05–0.3`
-  - ES odd:  `--lam-sym-odd 0.05–0.3` (use with `--lam-ortho` and a GS `--ref-model`)
-
-
-
+For technical questions or collaborations, please open an issue or reach out via the project repository.
