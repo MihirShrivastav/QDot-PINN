@@ -1,5 +1,0 @@
-E_final=6.67443019
-residual_final=2.79908144e-01
-norm_value_final=1.00149156
-norm_penalty_final=2.22473638e-06
-E_best=6.66630634
