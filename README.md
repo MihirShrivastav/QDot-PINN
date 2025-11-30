@@ -67,7 +67,7 @@ The calculated eigenvalues reveal the distinct energy scales of the system:
 
 | State | Energy (meV) | Splitting (meV) | Interpretation |
 | :--- | :--- | :--- | :--- |
-| **GS** | 3.736 | — | Bonding orbital (Symmetric) |
+| **GS** | 3.736 | -- | Bonding orbital (Symmetric) |
 | **ES1** | 3.975 | 0.239 | Antibonding orbital (Anti-symmetric) |
 | **ES2** | 5.630 | 1.654 | Second harmonic in $x$ ($n_x=2$) |
 
@@ -93,33 +93,47 @@ The first excited state $\psi_1$ exhibits **odd parity** along the inter-dot axi
 
 The second excited state displays a three-lobe structure aligned along the $x$-axis. This identifies it as the second excitation in the longitudinal direction ($n_x=2, n_y=0$) rather than a transverse excitation ($n_x=0, n_y=1$). This is consistent with our confinement parameters, where the $y$-confinement ($\hbar\omega_y = 5$ meV) is stiffer than the $x$-confinement.
 
+### Density Visualizations
+
+| State | Density Plot |
+| --- | --- |
+| Ground State | ![GS density](results/gs/gs_density.png) |
+| First Excited (ES1) | ![ES1 density](results/es1/es1_density.png) |
+| Second Excited (ES2) | ![ES2 density](results/es2/es2_density.png) |
+
+Each plot is generated directly from the notebook run and lives under `results/<state>/`.
+
 -----
 
-## 4\. Usage & Reproduction
+## 4\. Notebook Usage & Reproduction
 
-The code is split into a modular Python package (`src/`) and a Jupyter/Colab notebook for interactive training.
+The **Jupyter/Colab notebook is the primary entry point** for this project. It bundles the physical constants, model definitions, training loop, diagnostics, and artifact export into a single executable document.
 
-### Quick Start (CLI)
+### Run on Google Colab (recommended)
+1. Open [Google Colab](https://colab.research.google.com/) and upload `train_dqd_colab.ipynb`, or open it directly from this repository.
+2. Set the runtime to GPU (optional but speeds up training).
+3. Run all cells. The notebook sequentially trains GS - ES1 - ES2, storing outputs in `colab_results/state_gs`, `state_es1`, and `state_es2`.
+4. Download the generated folders if you want to analyze them locally; they follow the same structure demonstrated in `results/`.
 
-To train the ground state from scratch:
+### Run locally
+1. Install dependencies into a virtual environment:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+   pip install --upgrade pip
+   pip install torch numpy scipy matplotlib seaborn tqdm jupyterlab
+   ```
+2. Launch JupyterLab and open `train_dqd_colab.ipynb`.
+3. Execute the notebook; artifacts will be written to `colab_results/` by default. You can change the root directory in the configuration cell.
 
-```bash
-# Install dependencies
-pip install torch numpy scipy matplotlib seaborn tqdm
+### What the notebook saves
+- `model_best.pt`, `config.json`, `params.txt` per state.
+- `energies.txt`, `history.json/csv`, `density_features.json/csv`.
+- Plots (`psi_density.png`, `training_history.png`, potential snapshots) and raw grids (`psi_grid.pt`, `*_wavefunction_*.npy`).
 
-# Train Ground State
-python -m src.train_1e \
-  --state 0 \
-  --outdir data/run_gs \
-  --a 1.5 --hbar-omega-x 3.0 --hbar-omega-y 5.0 \
-  --epochs 1200
-```
+The `results/` directory in this repository is a snapshot of such a run for quick inspection.
 
-### Reproducing Results
-
-To reproduce the figures shown above, utilize `train_dqd_colab.ipynb`. The notebook contains the full training pipeline for GS $\to$ ES1 $\to$ ES2, including the hyperparameter scheduling used to ensure convergence.
-
-**Pre-computed results:** The `results/` directory contains the artifacts (model weights, JSON logs, and density plots) from the reference run described in this README.
+> **Note:** The CLI scripts in `src/` share the same core logic, but we focus documentation and support on the notebook workflow for reproducibility.
 
 -----
 
